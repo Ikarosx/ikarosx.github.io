@@ -1,0 +1,1 @@
+const e=JSON.parse('{"key":"v-42e2e558","path":"/tags/Cache-Control/1/","title":"","lang":"en-US","frontmatter":{"layout":"Categories"},"headers":[],"git":{},"filePathRelative":null}');export{e as data};

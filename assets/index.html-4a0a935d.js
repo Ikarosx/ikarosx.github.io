@@ -1,0 +1,1 @@
+const t=JSON.parse('{"key":"v-97cc1f3c","path":"/tags/BeautifulSoup/1/","title":"","lang":"en-US","frontmatter":{"layout":"Categories"},"headers":[],"git":{},"filePathRelative":null}');export{t as data};
