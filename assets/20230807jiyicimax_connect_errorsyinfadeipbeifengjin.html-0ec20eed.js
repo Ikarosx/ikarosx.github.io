@@ -1,0 +1,44 @@
+import{_ as s,p as n,q as a,Y as e}from"./framework-f2b64c38.js";const i={},c=e(`<h1 id="背景" tabindex="-1"><a class="header-anchor" href="#背景" aria-hidden="true">#</a> 背景</h1><p>前几天同事迁移数据库到新服务器上，启动后第二天发现系统登录不上，查看Java程序日志报错&#39;host_name&#39; is blocked because of many connection errors.Unblock with &#39;mysqladmin flush-hosts&#39;，因为是周末，简单查了一下，发现直接说执行<code>flush hosts</code>就可以解决，就临时处理了一下，果然可以。顺带看了一下原因说是错误的连接数太多，想着排查也麻烦，就不管了，但后续上班又发现出现了问题，于是研究了半天。</p><h1 id="研究思路" tabindex="-1"><a class="header-anchor" href="#研究思路" aria-hidden="true">#</a> 研究思路</h1><h2 id="日志" tabindex="-1"><a class="header-anchor" href="#日志" aria-hidden="true">#</a> 日志</h2><p>查看各种日志，包括mysql，应用程序</p><h3 id="mysql日志" tabindex="-1"><a class="header-anchor" href="#mysql日志" aria-hidden="true">#</a> mysql日志</h3><div class="language-bash line-numbers-mode" data-ext="sh"><pre class="language-bash"><code><span class="token function">less</span> /var/log/mysqld.log
+<span class="token comment"># shift g 跳转到最后</span>
+<span class="token comment"># 看到了一些bad handshake提示，其他的没什么特殊的了</span>
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><h3 id="应用程序" tabindex="-1"><a class="header-anchor" href="#应用程序" aria-hidden="true">#</a> 应用程序</h3><p>找到自己部署的程序上的日志，一样的方式查看，只能看到连接的报错，报错内容是 <code>&#39;host_name&#39; is blocked because of many connection errors.Unblock with &#39;mysqladmin flush-hosts&#39;</code></p><p>顺便百度了一下这个报错，能够关联到<code>max_connect_errors</code>这个参数<br> 本质上就是每次链接报错，connect-error就会+1，当达到设置的最大值，就会出现<code>is blocked because of many connection errors</code>报错</p><div class="language-bash line-numbers-mode" data-ext="sh"><pre class="language-bash"><code><span class="token comment"># 查询报错情况</span>
+<span class="token keyword">select</span> * from performance_schema.host_cache<span class="token punctuation">;</span>
+<span class="token comment"># 临时解决方案，治标不治本，清空统计次数</span>
+flush hosts<span class="token punctuation">;</span>
+
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><p>根据上面日志和搜索结果判断就是某个程序链接失败，导致<code>bad handshake</code><br> 在我flush hosts后，在查询可以观察到错误次数又开始增加了<br> 说明某个程序一直在不间断的发送</p><h2 id="查找发请求的程序" tabindex="-1"><a class="header-anchor" href="#查找发请求的程序" aria-hidden="true">#</a> 查找发请求的程序</h2><p>根据上面的条件，我只能判断出某个程序有问题，但是确认不了是哪个程序<br> 根据经验，在连接mysql的时候，本地会有一个端口，能够找到这个端口，那就可以找到pid，进而找到是哪个程序</p><div class="language-bash line-numbers-mode" data-ext="sh"><pre class="language-bash"><code><span class="token comment"># 找到和服务器3306端口有关的连接</span>
+<span class="token comment"># 但是结果只能查看到正常的连接，没有CLOSE也没有WAIT,都是目前运行正常的</span>
+<span class="token comment"># 猜测是连接失败后直接就关闭了</span>
+ss <span class="token parameter variable">-ano</span> <span class="token operator">|</span> <span class="token function">grep</span> <span class="token string">&#39;10.68.1.20:3306&#39;</span>
+
+<span class="token comment"># 利用tcpdump监控</span>
+<span class="token comment"># -i enp4s1 指定网卡</span>
+<span class="token comment"># -n 过滤 指定ip为10.68.6.62，端口3306, 状态异常的</span>
+<span class="token comment"># 能够查看到一直在往3306发数据，端口号也有</span>
+<span class="token comment"># 但是ss根据端口号查pid却查不到</span>
+tcpdump <span class="token parameter variable">-i</span> enp4s1 <span class="token parameter variable">-n</span>  <span class="token function">host</span> <span class="token number">10.68</span>.6.62 and port <span class="token number">3306</span> and <span class="token string">&#39;tcp[tcpflags] &amp; (tcp-syn|tcp-fin) != 0&#39;</span>
+<span class="token comment"># 使用-w导出pcap包，放到wireshark查看</span>
+<span class="token comment"># 分析后可以看到是发了一个登陆请求，但是username为空</span>
+tcpdump <span class="token parameter variable">-i</span> enp4s1 <span class="token parameter variable">-n</span>  <span class="token function">host</span> <span class="token number">10.68</span>.6.62 and port <span class="token number">3306</span> <span class="token parameter variable">-w</span> mysql.pcap
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><img src="https://ikaros-picture.oss-cn-shenzhen.aliyuncs.com/typora202308081020636.jpg"><img src="https://ikaros-picture.oss-cn-shenzhen.aliyuncs.com/typora202308081020605.jpg"><p>从上面可以进一步确定一直在发登陆包，但是仍然无法确定是哪个程序发起的<br> 能够拿到端口号，但是等我去ss查看的时候已经关闭了，猜测如果够快就可以监听到<br> 但是我用watch 0.1s也无法获取到，就放弃这个思路了</p><p>了解到iftop可以监控网络情况</p><div class="language-bash line-numbers-mode" data-ext="sh"><pre class="language-bash"><code><span class="token comment"># 查看发往目标ip的流量情况</span>
+<span class="token comment"># 一样可以看到端口，可以看到一直在请求，流量一直在加  </span>
+<span class="token comment"># 但是仍然无法看到pid，iftop并不能筛选出哪一个程序发起的请求</span>
+iftop <span class="token parameter variable">-pP</span> <span class="token parameter variable">-N</span>  <span class="token parameter variable">-f</span>  <span class="token string">&quot;dst host 10.68.6.62&quot;</span>
+
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><p>最后一个思路，利用strace</p><div class="language-bash line-numbers-mode" data-ext="sh"><pre class="language-bash"><code><span class="token comment"># strace可以跟踪系统调用，因此可以很详细看到网络情况，最主要是，可以根据pid过滤</span>
+<span class="token comment"># -e trace指定network，输出网络相关的</span>
+<span class="token comment"># -o 指定输出文件</span>
+<span class="token comment"># -p pid</span>
+<span class="token comment"># 那这个pid，怎么找呢。。。</span>
+<span class="token comment"># 我用的老办法，观察几个可能的程序   </span>
+<span class="token comment"># 目前服务器都是java类的，使用jps查看，就几个</span>
+<span class="token comment"># 把这几个pid一个一个输进去查看，结果第二个就出结果了  </span>
+<span class="token function">strace</span> <span class="token parameter variable">-f</span> <span class="token parameter variable">-e</span> <span class="token assign-left variable">trace</span><span class="token operator">=</span>network <span class="token parameter variable">-o</span> <span class="token number">245484</span>.log <span class="token parameter variable">-p</span> <span class="token number">245484</span>
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><p>这张图片不是实际的，只是随便找了个测试，大概效果就这样，可以看到ip和端口都是对的<br> 由此确实是哪一个程序在发送<br><img src="https://ikaros-picture.oss-cn-shenzhen.aliyuncs.com/typora202308081040696.png"></p><h2 id="收尾" tabindex="-1"><a class="header-anchor" href="#收尾" aria-hidden="true">#</a> 收尾</h2><p>确认是哪一个程序以后</p><div class="language-bash line-numbers-mode" data-ext="sh"><pre class="language-bash"><code><span class="token comment"># 通过pid确认程序位置</span>
+<span class="token comment"># 发现是一个jar包</span>
+<span class="token function">ps</span> <span class="token parameter variable">-ef</span>  <span class="token operator">|</span> <span class="token function">grep</span> pid
+<span class="token comment"># 找到jar包位置</span>
+<span class="token function">find</span> / <span class="token parameter variable">-name</span> <span class="token string">&#39;xxx.jar&#39;</span>
+<span class="token comment"># 查看jar包的日志，并解压jar包查看配置文件</span>
+<span class="token comment"># 是一个SpringBoot，但是没有配置数据库账号密码   </span>
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><p>前面一开始其实就已经利用了jps查看到了有2个jar包，也观察了日志，但是<strong>看漏</strong>了（doge</p><h2 id="总结" tabindex="-1"><a class="header-anchor" href="#总结" aria-hidden="true">#</a> 总结</h2><p>学习了各个网络工具的使用，以及排查网络问题的思路<br> 但是不确定是否有更优解，有待学习<br> 另外看日志确实要看完整一点，一开始其实已经用jps发现了有问题的jar，但是看日志看漏了<br> 期间还遇到一点，系统是centos8没有装工具<br> 下载工具的时候发现yum无法下载元数据<br> 可能是centos8停止维护的原因，换了各种源都不行<br> 最后也没解决，直接下载了rpm包安装</p>`,29),r=[c];function p(l,t){return n(),a("div",null,r)}const d=s(i,[["render",p],["__file","20230807jiyicimax_connect_errorsyinfadeipbeifengjin.html.vue"]]);export{d as default};

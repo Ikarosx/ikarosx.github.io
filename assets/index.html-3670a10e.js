@@ -1,0 +1,1 @@
+const a=JSON.parse('{"key":"v-eb5e60f6","path":"/tags/xiaoyuanwang/1/","title":"","lang":"en-US","frontmatter":{"layout":"Categories"},"headers":[],"git":{},"filePathRelative":null}');export{a as data};
